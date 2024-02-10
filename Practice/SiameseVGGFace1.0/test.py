@@ -33,3 +33,6 @@ def make_embedding():
 
 embedding = make_embedding()
 print(embedding.summary())
+print('Teste2')
+
+print("Num GPUs Available:", len(tf.config.list_physical_devices('GPU')))

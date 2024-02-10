@@ -1,7 +1,8 @@
 import tensorflow as tf
+import keras
 
-print("Keras version:", keras.__version__)
 print("TensorFlow version:", tf.__version__)
+print("Keras version:", keras.__version__)
 
 
 import os
@@ -71,3 +72,92 @@ def make_embedding():
   return Model(inputs=[input_layer], outputs=[x], name='embedding')
 
 embedding = make_embedding()
+
+class L1Dist(Layer):
+  def __init__(self, **kwargs):
+    super().__init__()
+
+def call(self, input_embedding, validation_embedding):
+  return tf.math.abs(input_embedding - validation_embedding)
+
+def make_siamese_model():
+  # Handle inputs
+  input_image = Input(name='input_img', shape=(250,250,3))
+  validation_image = Input(name='validation_img', shape=(250,250,3))
+
+  # Combine siamese distance components
+  siamese_layer = L1Dist()
+  siamese_layer._name = 'distance'
+  distances = siamese_layer(embedding(input_image), embedding(validation_image))
+
+  # Classification Layer
+  classifier = Dense(1, activation='sigmoid')(distances)
+
+  return Model(inputs=[input_image, validation_image], outputs=classifier, name='SiameseNetwork')
+
+siamese_model = make_siamese_model()
+print(siamese_model.summary())
+
+binary_cross_loss = tf.losses.BinaryCrossentropy()
+opt = tf.keras.optimizers.Adam(1e-4)
+
+@tf.function
+def train_step(batch):
+  with tf.GradientTape() as tape:
+    #Get anchor and positive/negative image
+    X = batch[:2]
+    #Get label
+    y = batch[2]
+
+    # Forward pass
+    yhat = siamese_model(X, training=True)
+    #Calculate loss
+    loss = binary_cross_loss(y, yhat)
+
+  # Calculate gradients
+  grad = tape.gradient(loss, siamese_model.trainable_variables)
+
+  # Calculate updated weights and apply to siamese model
+  opt.apply_gradients(zip(grad, siamese_model.trainable_variables))
+
+  gc.collect()
+
+  return loss
+
+from tensorflow.keras.metrics import Precision, Recall, Accuracy
+
+def convert(y_hat):
+  for i in range(len(y_hat)):
+    if (y_hat[i] > 0.5):
+      y_hat[i] = 1.0
+    else:
+      y_hat[i] = 0
+  return y_hat
+
+def train(data, EPOCHS):
+  # Loop through epochs
+  for epoch in range(1, EPOCHS+1):
+    print('\n Epoch {}/{}'.format(epoch, EPOCHS))
+    progbar = tf.keras.utils.Progbar(len(data))
+
+    a = Accuracy()
+
+    # Loop through each batch
+    for idx, batch in enumerate(data):
+      # Run train step here
+      loss = train_step(batch)
+      yhat = siamese_model.predict(batch[:2], verbose=0)
+      a.update_state(batch[2], convert(yhat))
+      gc.collect()
+      progbar.update(idx+1)
+
+    print(loss.numpy(), a.result().numpy())
+    gc.collect()
+    #Save checkpoints
+    #if epoch % 10 == 0:
+      #checkpoint.save(file_prefix=checkpoint_prefix)
+
+EPOCHS = 100
+train(data, EPOCHS)
+
+siamese_model.save('siamesemodelv4.h5')
