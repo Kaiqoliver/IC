@@ -11,80 +11,93 @@ from tensorflow.keras.models import  Model
 from tensorflow.keras.layers import Layer, Flatten, Dense, Input, Lambda
 import tensorflow.keras.backend as K
 from sklearn.datasets import fetch_lfw_pairs
+from sklearn.model_selection import train_test_split
 
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        # Currently, memory growth needs to be the same across GPUs
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+        print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
+    except RuntimeError as e:
+        # Memory growth must be set before GPUs have been initialized
+        print(e)
 
-train_data = fetch_lfw_pairs(subset='train', funneled=False, resize=1.0, color=True, slice_=(slice(0, 250), slice(0, 250)))
-test_data = fetch_lfw_pairs(subset= 'test', funneled=False, resize=1.0, color=True, slice_=(slice(0, 250), slice(0, 250)))
+train_data = fetch_lfw_pairs(subset='10_folds', funneled=False, resize=1.0, color=True, slice_=(slice(0, 250), slice(0, 250)))
+#test_data = fetch_lfw_pairs(subset= 'test', funneled=False, resize=1.0, color=True, slice_=(slice(0, 250), slice(0, 250)))
 
 images_train = train_data.pairs
 labels_train = train_data.target
 
-images_test = test_data.pairs
-labels_test = test_data.target
+#images_test = test_data.pairs
+#labels_test = test_data.target
 
+images_train, images_test, labels_train, labels_test = train_test_split(images_train, labels_train, test_size=0.1, random_state=42)
 
-
-# Reshaping the dataset to (4400, 250, 250, 3)
-reshaped_train_images = images_train.reshape((-1, 250, 250, 3))
-reshaped_test_images = images_test.reshape((-1, 250, 250, 3))
-
-# Calculating mean and variance for each channel within each image
-train_mean_per_channel = np.mean(reshaped_train_images, axis=(1, 2), keepdims=True)
-train_variance_per_channel = np.var(reshaped_train_images, axis=(1, 2), keepdims=True)
-
-test_mean_per_channel = np.mean(reshaped_test_images, axis=(1, 2), keepdims=True)
-test_variance_per_channel = np.var(reshaped_test_images, axis=(1, 2), keepdims=True)
- 
-# Normalizing each channel of each image separately based on its own mean and variance
-normalized_train_images = (reshaped_train_images - train_mean_per_channel) / np.sqrt(train_variance_per_channel)
-normalized_test_images = (reshaped_test_images - test_mean_per_channel) / np.sqrt(test_variance_per_channel)
-
-# Reshape the normalized images back to the original shape
-normalized_train_images = normalized_train_images.reshape((2200, 2, 250, 250, 3))
-normalized_test_images = normalized_test_images.reshape((1000, 2, 250, 250, 3))
-
-images_train = normalized_train_images
-images_test = normalized_test_images
-
-# Assuming images and labels are NumPy arrays
-images_train_tensor = tf.convert_to_tensor(images_train)
-labels_train_tensor = tf.convert_to_tensor(labels_train)
-
-
-#del train_data
+del train_data
 #del test_data
-#del images_train
-#del labels_train
-#gc.collect()
+gc.collect()
 
-# Assuming 'images' is your tensor with dimensions (2200, 2, 250, 250, 3)
-images_train_shape = images_train_tensor.shape
-images_test_shape = images_test.shape
+def calculate_means(pairs_rgb_dataset):
+    means = [0.0, 0.0, 0.0]
+    stds = [0.0, 0.0, 0.0]
 
-# Reshape the tensor to (2200*2, 250, 250, 3) to treat each image as a separate entity
-images_train_tensor_reshaped = tf.reshape(images_train_tensor, (-1, images_train_shape[2], images_train_shape[3], images_train_shape[4]))
-images_test_reshaped = np.reshape(images_test, (-1, images_test_shape[2], images_test_shape[3], images_test_shape[4]))
+    # Reshape the dataset for easier computation
+    reshaped_dataset = np.reshape(pairs_rgb_dataset, (-1, 250, 250, 3))
+    reshaped_dataset = np.concatenate(reshaped_dataset, axis=0)
+    reshaped_dataset = np.concatenate(reshaped_dataset, axis=0)
 
-# Separate the images into two tensors
-first_train_images = images_train_tensor_reshaped[::2]  # Select every other image starting from the first
-second_train_images = images_train_tensor_reshaped[1::2]  # Select every other image starting from the second
+    means[0] = np.mean(reshaped_dataset[:,0])
+    means[1] = np.mean(reshaped_dataset[:,1])
+    means[2] = np.mean(reshaped_dataset[:,2])
 
-first_test_images = images_test_reshaped[::2]  # Select every other image starting from the first
-second_test_images = images_test_reshaped[1::2]  # Select every other image starting from the second
+    stds[0] = np.std(reshaped_dataset[:,0])
+    stds[1] = np.std(reshaped_dataset[:,1])
+    stds[2] = np.std(reshaped_dataset[:,2])
 
-# Now, 'first_images' and 'second_images' are tensors with dimensions (2200, 250, 250, 3)
+    return means, stds
 
-# Assuming 'first_images', 'second_images', and 'labels' are your tensors
-first_train_images_dataset = tf.data.Dataset.from_tensor_slices(first_train_images)
-second_train_images_dataset = tf.data.Dataset.from_tensor_slices(second_train_images)
-labels_train_dataset = tf.data.Dataset.from_tensor_slices(labels_train_tensor)
+channel_means, channel_stds = calculate_means(images_train)
 
-# Zip the datasets
-data_train = tf.data.Dataset.zip((first_train_images_dataset, second_train_images_dataset, labels_train_dataset))
+print(channel_means, channel_stds)
 
+def normalize_images(images_train, channel_means, channel_stds):
+  # Iterate through each pair of images
+  for i in range(images_train.shape[0]):
+      # Normalize the first image in the pair
+      images_train[i, 0] = (images_train[i, 0] - channel_means) / channel_stds
+      # Normalize the second image in the pair
+      images_train[i, 1] = (images_train[i, 1] - channel_means) / channel_stds
+  
+  return images_train
 
+# Create a generator for training data
+images_train = normalize_images(images_train, channel_means, channel_stds)
+images_test = normalize_images(images_test, channel_means, channel_stds)
+
+def train_data_generator(images, labels):
+    for i in range(images.shape[0]):
+        yield images[i][0], images[i][1]
+
+# Create TensorFlow datasets
+data_train = tf.data.Dataset.from_tensor_slices((images_train[:, 0], images_train[:, 1], labels_train))
+print(data_train)
 data_train = data_train.batch(16)
-data = data_train.prefetch(8)
+data_train = data_train.prefetch(8)
+
+del images_train
+del labels_train
+gc.collect()
+
+data_test = tf.data.Dataset.from_tensor_slices((images_test[:,0], images_test[:,1] , labels_test))
+data_test = data_test.batch(16)
+data_test = data_test.prefetch(8)
+
+del images_test
+del labels_test
+gc.collect()
 
 def make_embedding():
   #Getting the trained model
@@ -135,10 +148,11 @@ opt = tf.keras.optimizers.Adam(1e-4)
 @tf.function
 def train_step(batch):
   with tf.GradientTape() as tape:
+    #print(batch)
     # Get anchor and positive/negative image
-    X = batch[:2]
+    X = batch[0]
     # Get label
-    y = batch[2]
+    y = batch[1]
 
     # Forward pass
     yhat = siamese_model(X, training=True)
@@ -168,58 +182,57 @@ def convert(y_hat):
       y_hat[i] = 0
   return y_hat
 
+def count_elements(dataset):
+    count = 0
+    for _ in dataset:
+        count += 1
+    return count
+
 def train(data, EPOCHS):
-  # Loop through epochs
-  for epoch in range(1, EPOCHS+1):
-    print('\n Epoch {}/{}'.format(epoch, EPOCHS))
-    progbar = tf.keras.utils.Progbar(len(data), verbose=0)
-
-    a = Accuracy()
-
-    # Loop through each batch
-    for idx, batch in enumerate(data):
-      # Run train step here
-      loss = train_step(batch)
-      yhat = siamese_model.predict(batch[:2], verbose=0)
-      a.update_state(batch[2], convert(yhat))
-      gc.collect()
-      progbar.update(idx+1)
-
-    v = Accuracy()
-    yhatv = siamese_model.predict([first_test_images, second_test_images], batch_size=16, verbose=0)
-    v.update_state(labels_test, convert(yhatv))
-
-    print(loss.numpy(), a.result().numpy(), v.result().numpy())
-    gc.collect()
-
-def train2(data, EPOCHS):
-    
-    siamese_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-    # Define a callback for progress bar
-    progbar_callback = ProgbarLogger()
-
     # Loop through epochs
     for epoch in range(1, EPOCHS+1):
         print('\n Epoch {}/{}'.format(epoch, EPOCHS))
 
+        # Count the number of elements in the dataset
+        dataset_length = count_elements(data)
+        progbar = tf.keras.utils.Progbar(dataset_length, verbose=0)
+
         a = Accuracy()
 
-        # Train the model using fit method and include the ProgbarLogger callback
-        history = siamese_model.fit(data, epochs=1, verbose=0, callbacks=[progbar_callback])
+        # Loop through each batch
+        for idx, batch in enumerate(data):
+            # Extract anchor and positive images from the batch
+            input_img, validation_img, labels = batch
+            # Concatenate the images along the batch dimension
+            concatenated_imgs = (input_img, validation_img)
+            # Run train step here
+            loss = train_step((concatenated_imgs, labels))
+            yhat = siamese_model.predict(concatenated_imgs, verbose=0)
+            a.update_state(labels, convert(yhat))
 
-        # Extract loss and accuracy from the history
-        loss = history.history['loss'][0]
-        accuracy = history.history['accuracy'][0]
 
-        print(loss, accuracy)
+            # Run train step here
+            #loss = train_step(batch)
+            #yhat = siamese_model.predict(batch, verbose=0)
+            #a.update_state(batch[2], convert(yhat))
+            gc.collect()
+            progbar.update(idx+1)
+
+        v = Accuracy()
+
+        for idx, batch in enumerate(data_test):
+            input_img, validation_img, labels = batch
+            concatenated_imgs = (input_img, validation_img)
+            yhat = siamese_model.predict(concatenated_imgs, verbose=0)
+            v.update_state(labels, convert(yhat))
+            gc.collect()
+
+
+        print(loss.numpy(), a.result().numpy(), v.result().numpy())
         gc.collect()
-
-        # Save checkpoints
-        # if epoch % 10 == 0:
-        #     checkpoint.save(file_prefix=checkpoint_prefix)
 
 
 EPOCHS = 100
-train(data, EPOCHS)
+train(data_train, EPOCHS)
 
 siamese_model.save('siamesemodelv4.h5')
