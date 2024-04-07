@@ -8,7 +8,8 @@ import numpy as np
 import gc
 
 from tensorflow.keras.models import  Model
-from tensorflow.keras.layers import Layer, Flatten, Dense, Input, Lambda
+from tensorflow.keras.layers import Layer, Flatten, Dense, Input, Lambda, Dropout
+from tensorflow.keras.regularizers import l2
 import tensorflow.keras.backend as K
 from sklearn.datasets import fetch_lfw_pairs
 from sklearn.model_selection import train_test_split
@@ -110,8 +111,11 @@ def make_embedding():
   input_layer = vgg_model.get_layer(None, 0).input
   last_layer = vgg_model.get_layer('pool5').output
   x = Flatten(name='flatten')(last_layer)
+  x = Dropout(0.2)(x)
   x = Dense(512, activation='relu', name='fc6')(x)
+  x = Dropout(0.2)(x)  # Adding dropout after the first dense layer
   x = Dense(128, activation='relu', name='fc7')(x)
+  x = Dropout(0.2)(x)  # Adding dropout after the second dense layer
 
   return Model(inputs=[input_layer], outputs=[x], name='embedding')
 
@@ -156,8 +160,16 @@ def train_step(batch):
 
     # Forward pass
     yhat = siamese_model(X, training=True)
-    # Calculate loss
-    loss = binary_cross_loss(y, yhat)
+    # Calculate binary cross-entropy loss
+    cross_entropy_loss = binary_cross_loss(y, yhat)
+    
+    # Calculate L2 regularization loss
+    l2_regularization_loss = tf.reduce_sum([tf.nn.l2_loss(w) for w in siamese_model.trainable_variables])
+    # Set the regularization strength (lambda)
+    l2_lambda = 0.001
+    
+    # Total loss including regularization
+    loss = cross_entropy_loss + l2_lambda * l2_regularization_loss
 
   # Calculate gradients
   grad = tape.gradient(loss, siamese_model.trainable_variables)
@@ -192,6 +204,9 @@ def train(data, EPOCHS):
     # Loop through epochs
     for epoch in range(1, EPOCHS+1):
         print('\n Epoch {}/{}'.format(epoch, EPOCHS))
+
+        # Shuffle training data before each epoch
+        data = data.shuffle(buffer_size=data.cardinality())
 
         # Count the number of elements in the dataset
         dataset_length = count_elements(data)
@@ -232,7 +247,7 @@ def train(data, EPOCHS):
         gc.collect()
 
 
-EPOCHS = 100
+EPOCHS = 150
 train(data_train, EPOCHS)
 
 siamese_model.save('siamesemodelv4.h5')
